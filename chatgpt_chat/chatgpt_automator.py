@@ -18,12 +18,13 @@ class ChatGPTAutomator:
     """
     Automates ChatGPT in Brave Browser via Chrome DevTools Protocol (CDP).
     Supports prompt input, text output retrieval, and DALL-E / 4o image generation download.
+    Runs side-by-side with your existing Brave browser without closing your tabs.
     """
 
     def __init__(
         self,
         port: int = 9222,
-        profile_mode: str = "main",  # 'main', 'dedicated', or 'auto'
+        profile_mode: str = "auto",  # 'auto', 'dedicated', or 'main'
         output_dir: Optional[str] = None,
         timeout: int = 180,
     ):
@@ -93,19 +94,39 @@ class ChatGPTAutomator:
 
     def _ensure_ready(self):
         """Wait until ChatGPT prompt input is visible and ready."""
-        print("Ensuring ChatGPT editor is ready...")
         editor_selector = 'div[contenteditable="true"], div.ProseMirror, div[aria-label="Ask ChatGPT"], #prompt-textarea'
-        
+        login_btn_selector = 'button[data-testid="login-button"], a[data-testid="login-button"], a[href*="/auth/login"]'
+
+        # Quick check if already ready
+        try:
+            if self._page.locator(editor_selector).first.is_visible(timeout=3000):
+                print("✓ ChatGPT editor ready.")
+                return
+        except Exception:
+            pass
+
+        # Check if login is needed (e.g. first run of dedicated profile)
+        try:
+            if self._page.locator(login_btn_selector).first.is_visible(timeout=2000):
+                print("\n" + "=" * 65)
+                print(" [ACTION REQUIRED] Please log into ChatGPT in the opened Brave window.")
+                print(" Your login session will be permanently saved for all future runs.")
+                print(" Waiting for login to complete...")
+                print("=" * 65 + "\n")
+        except Exception:
+            pass
+
+        print("Waiting for ChatGPT editor to become ready...")
         start_wait = time.time()
-        while time.time() - start_wait < 60:
+        while time.time() - start_wait < 300:
             try:
                 el = self._page.locator(editor_selector).first
                 if el.is_visible(timeout=2000):
-                    print("✓ ChatGPT editor ready.")
+                    print("✓ ChatGPT editor ready.\n")
                     return
             except Exception:
                 pass
-            time.sleep(1)
+            time.sleep(2)
 
         logger.warning("Timed out waiting for editor. Continuing anyway.")
 
@@ -164,7 +185,6 @@ class ChatGPTAutomator:
     def _wait_for_completion(self) -> Dict[str, Any]:
         """Wait for text streaming or image rendering to complete."""
         poll_start = time.time()
-        generation_started = False
         saw_stop_button = False
 
         while time.time() - poll_start < self.timeout:
@@ -196,7 +216,6 @@ class ChatGPTAutomator:
 
             if status["hasStop"]:
                 saw_stop_button = True
-                generation_started = True
             elif saw_stop_button:
                 # Stop button was visible and has now disappeared
                 time.sleep(2.5)  # buffer for image rendering / decoding

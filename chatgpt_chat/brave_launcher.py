@@ -67,17 +67,6 @@ def is_brave_running() -> bool:
         return False
 
 
-def kill_brave_processes() -> bool:
-    """Terminate running brave.exe processes."""
-    try:
-        subprocess.run(["taskkill", "/F", "/IM", "brave.exe"], capture_output=True, check=False)
-        time.sleep(2.0)
-        return True
-    except Exception as e:
-        logger.error(f"Failed to kill Brave: {e}")
-        return False
-
-
 def wait_for_debug_port(port: int = DEFAULT_DEBUG_PORT, max_wait: float = 20.0) -> bool:
     """Wait until the remote debugging port responds."""
     start_time = time.time()
@@ -90,64 +79,40 @@ def wait_for_debug_port(port: int = DEFAULT_DEBUG_PORT, max_wait: float = 20.0) 
 
 def launch_brave(
     port: int = DEFAULT_DEBUG_PORT,
-    profile_mode: str = "auto",  # "auto", "main", or "dedicated"
+    profile_mode: str = "auto",  # "auto", "dedicated", or "main"
     headless: bool = False,
     url: Optional[str] = "https://chatgpt.com"
 ) -> Tuple[bool, str]:
     """
     Ensure Brave is running with --remote-debugging-port.
-    Returns (success, message).
+    Never forcefully closes running Brave windows without user specification.
     """
     brave_path = find_brave_executable()
     if not brave_path:
         return False, "Could not locate brave.exe on this system. Please check your Brave installation."
 
-    # 1. Check if port is already active
+    # 1. If debug port is already active, reuse it immediately
     if is_port_listening(port):
         return True, f"Brave remote debugging is already active on http://127.0.0.1:{port}"
 
     brave_active = is_brave_running()
 
-    # 2. Handle 'auto' profile mode
+    # 2. In 'auto' mode:
+    # If Brave is already open for normal browsing, NEVER close it!
+    # Instead, smoothly launch a dedicated automation profile side-by-side.
     if profile_mode == "auto":
-        if not brave_active:
-            profile_mode = "main"
+        if brave_active:
+            logger.info("Normal Brave is already open. Using dedicated profile to avoid closing your tabs...")
+            profile_mode = "dedicated"
         else:
-            print("\n" + "=" * 65)
-            print(" [NOTICE] Brave is currently running without remote debugging.")
-            print(" Choose an option:")
-            print("   [1] Restart Brave with Remote Debugging (Recommended - keeps login)")
-            print("   [2] Launch Dedicated Profile (Runs side-by-side with your Brave)")
-            print("   [3] Cancel")
-            print("=" * 65)
-            try:
-                choice = input("Enter choice (1/2/3, default is 1): ").strip()
-            except Exception:
-                choice = "1"
-
-            if choice in ["2", "dedicated"]:
-                profile_mode = "dedicated"
-            elif choice in ["3", "cancel", "q"]:
-                return False, "Operation cancelled by user."
-            else:
-                profile_mode = "main"
+            profile_mode = "main"
 
     args = [brave_path, f"--remote-debugging-port={port}"]
     if headless:
         args.append("--headless=new")
 
-    # 3. Launch based on selected profile mode
-    if profile_mode == "main":
-        if is_brave_running():
-            logger.info("Closing active Brave processes to reopen with remote debugging...")
-            kill_brave_processes()
-
-        if url:
-            args.extend(["--restore-last-session", url])
-        logger.info(f"Launching Brave (Main Profile) with port {port}...")
-        subprocess.Popen(args)
-
-    elif profile_mode == "dedicated":
+    # 3. Launching
+    if profile_mode == "dedicated":
         os.makedirs(DEDICATED_PROFILE_DIR, exist_ok=True)
         args.extend([
             f"--user-data-dir={DEDICATED_PROFILE_DIR}",
@@ -156,7 +121,22 @@ def launch_brave(
         ])
         if url:
             args.append(url)
-        logger.info(f"Launching Brave (Dedicated Profile) with port {port}...")
+        logger.info(f"Launching Brave in dedicated profile (runs side-by-side, your work tabs remain open)...")
+        subprocess.Popen(args)
+
+    elif profile_mode == "main":
+        if brave_active:
+            msg = (
+                f"[ERROR] Brave is currently running normally without port {port}.\n"
+                "To avoid closing your open work tabs, use the dedicated profile instead:\n"
+                "  python run.py --profile dedicated\n"
+                "Or close Brave manually if you really want to use your main profile."
+            )
+            return False, msg
+
+        if url:
+            args.extend(["--restore-last-session", url])
+        logger.info(f"Launching Brave (Main Profile) with port {port}...")
         subprocess.Popen(args)
 
     else:
@@ -164,7 +144,7 @@ def launch_brave(
 
     # 4. Wait for port to become active
     if wait_for_debug_port(port, max_wait=20.0):
-        return True, f"Brave successfully started on http://127.0.0.1:{port} (profile: {profile_mode})"
+        return True, f"Brave successfully started on http://127.0.0.1:{port} (mode: {profile_mode})"
     else:
         return False, f"Brave was launched, but port {port} did not respond within 20 seconds."
 
