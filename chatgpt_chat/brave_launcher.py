@@ -18,7 +18,6 @@ COMMON_BRAVE_PATHS = [
 ]
 
 DEFAULT_DEBUG_PORT = 9222
-DEDICATED_PROFILE_DIR = os.path.expandvars(r"%LOCALAPPDATA%\BraveSoftware\Brave-ChatGPT-Automation\Profile")
 
 
 def find_brave_executable() -> Optional[str]:
@@ -67,6 +66,17 @@ def is_brave_running() -> bool:
         return False
 
 
+def kill_brave_processes() -> bool:
+    """Terminate running brave.exe processes."""
+    try:
+        subprocess.run(["taskkill", "/F", "/IM", "brave.exe"], capture_output=True, check=False)
+        time.sleep(2.0)
+        return True
+    except Exception as e:
+        logger.error(f"Failed to kill Brave: {e}")
+        return False
+
+
 def wait_for_debug_port(port: int = DEFAULT_DEBUG_PORT, max_wait: float = 20.0) -> bool:
     """Wait until the remote debugging port responds."""
     start_time = time.time()
@@ -79,74 +89,63 @@ def wait_for_debug_port(port: int = DEFAULT_DEBUG_PORT, max_wait: float = 20.0) 
 
 def launch_brave(
     port: int = DEFAULT_DEBUG_PORT,
-    profile_mode: str = "auto",  # "auto", "dedicated", or "main"
+    profile_mode: str = "main",
     headless: bool = False,
-    url: Optional[str] = "https://chatgpt.com"
+    url: Optional[str] = "https://chatgpt.com",
+    auto_restart: bool = False
 ) -> Tuple[bool, str]:
     """
-    Ensure Brave is running with --remote-debugging-port.
-    Never forcefully closes running Brave windows without user specification.
+    Ensure Brave is running with --remote-debugging-port on your main profile.
+    Reuses existing open browser without closing it if port is already active.
     """
     brave_path = find_brave_executable()
     if not brave_path:
         return False, "Could not locate brave.exe on this system. Please check your Brave installation."
 
-    # 1. If debug port is already active, reuse it immediately
+    # 1. If port is already active, we can connect directly without touching your open tabs!
     if is_port_listening(port):
-        return True, f"Brave remote debugging is already active on http://127.0.0.1:{port}"
+        return True, f"Connected to your active Brave browser on port {port}."
 
     brave_active = is_brave_running()
 
-    # 2. In 'auto' mode:
-    # If Brave is already open for normal browsing, NEVER close it!
-    # Instead, smoothly launch a dedicated automation profile side-by-side.
-    if profile_mode == "auto":
-        if brave_active:
-            logger.info("Normal Brave is already open. Using dedicated profile to avoid closing your tabs...")
-            profile_mode = "dedicated"
-        else:
-            profile_mode = "main"
+    # 2. If Brave is already open without the port:
+    if brave_active:
+        if not auto_restart:
+            print("\n" + "=" * 70)
+            print(" [ACTION NEEDED] Your active Brave browser is not yet on debug port 9222.")
+            print(" To connect to your open Brave window with your logged-in ChatGPT account:")
+            print("   1. Close your running Brave window once.")
+            print("   2. Reopen Brave by clicking your Taskbar icon (it now has port 9222 enabled).")
+            print("   All your previous tabs and ChatGPT login will restore.")
+            print("   From then on, you can run prompts anytime without ever closing Brave!")
+            print("=" * 70)
+            
+            try:
+                choice = input("\nWould you like this script to restart Brave now? (Y/n): ").strip().lower()
+            except Exception:
+                choice = "y"
 
-    args = [brave_path, f"--remote-debugging-port={port}"]
+            if choice == "n":
+                return False, "Please reopen Brave from your Taskbar and run the script again."
+
+        # Restart Brave once
+        logger.info("Restarting Brave with your main profile on port 9222...")
+        kill_brave_processes()
+
+    # 3. Launch Brave with main profile and restore last session
+    args = [brave_path, f"--remote-debugging-port={port}", "--restore-last-session"]
     if headless:
         args.append("--headless=new")
+    if url:
+        args.append(url)
 
-    # 3. Launching
-    if profile_mode == "dedicated":
-        os.makedirs(DEDICATED_PROFILE_DIR, exist_ok=True)
-        args.extend([
-            f"--user-data-dir={DEDICATED_PROFILE_DIR}",
-            "--no-first-run",
-            "--no-default-browser-check"
-        ])
-        if url:
-            args.append(url)
-        logger.info(f"Launching Brave in dedicated profile (runs side-by-side, your work tabs remain open)...")
-        subprocess.Popen(args)
+    logger.info(f"Starting Brave on port {port}...")
+    subprocess.Popen(args)
 
-    elif profile_mode == "main":
-        if brave_active:
-            msg = (
-                f"[ERROR] Brave is currently running normally without port {port}.\n"
-                "To avoid closing your open work tabs, use the dedicated profile instead:\n"
-                "  python run.py --profile dedicated\n"
-                "Or close Brave manually if you really want to use your main profile."
-            )
-            return False, msg
-
-        if url:
-            args.extend(["--restore-last-session", url])
-        logger.info(f"Launching Brave (Main Profile) with port {port}...")
-        subprocess.Popen(args)
-
-    else:
-        return False, f"Unknown profile mode: {profile_mode}"
-
-    # 4. Wait for port to become active
     if wait_for_debug_port(port, max_wait=20.0):
-        return True, f"Brave successfully started on http://127.0.0.1:{port} (mode: {profile_mode})"
+        return True, f"Brave ready on port {port}. Connected to your main profile."
     else:
-        return False, f"Brave was launched, but port {port} did not respond within 20 seconds."
+        return False, f"Brave started, but port {port} did not respond within 20 seconds."
 
 
 if __name__ == "__main__":

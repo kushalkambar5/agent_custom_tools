@@ -85,7 +85,7 @@ def main():
     print_banner()
 
     parser = argparse.ArgumentParser(
-        description="Automate ChatGPT interactions in Brave Browser with text and image support."
+        description="Automate ChatGPT interactions in your already open Brave Browser."
     )
     parser.add_argument(
         "-p", "--prompt",
@@ -97,13 +97,6 @@ def main():
         type=int,
         default=9222,
         help="Brave remote debugging port (default: 9222)."
-    )
-    parser.add_argument(
-        "--profile",
-        type=str,
-        choices=["auto", "main", "dedicated"],
-        default="auto",
-        help="Profile mode: 'auto' (detect), 'main' (your regular profile), or 'dedicated' (runs side-by-side)."
     )
     parser.add_argument(
         "--new-chat",
@@ -140,12 +133,12 @@ def main():
 
     automator = ChatGPTAutomator(
         port=args.port,
-        profile_mode=args.profile,
+        profile_mode="main",
         output_dir=args.output_dir,
         timeout=args.timeout,
     )
 
-    print("Initializing connection to Brave...")
+    print("Connecting to your active Brave Browser...")
     if not automator.start():
         print("[FAIL] Could not establish connection with Brave Browser.")
         sys.exit(1)
